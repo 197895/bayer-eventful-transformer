@@ -115,6 +115,8 @@ class Block(ExtendedModule):
         self.mlp_2 = CountedLinear(in_features=dim * mlp_ratio, out_features=dim)
 
     def forward(self, x):
+        if isinstance(x,tuple):
+            x,_=x
         skip_1 = x
         x = self.input_layer_norm(x)
 
@@ -573,3 +575,119 @@ class EventfulBlock(EventfulMatmul1Block):
         a = self._recombine_heads(a)
         a = self._uncast_matmul_2(a, old_dtype)
         return a, ats_indices
+
+
+
+
+class BayerBlock(EventfulBlock):
+    """
+    An EventfulMatmul1Block that also adds eventfulness to the
+    attention-value product.
+    """
+    def __init__(self, **super_kwargs):
+        super().__init__(**super_kwargs)
+    def forward(self, x):
+        x,forced_index=x
+        skip_1, x, forced_index = self._forward_pre_attention(x,forced_index)
+        x = self.qkv_accumulator(x, forced_index)
+        x, ats_indices = self._forward_attention((x, forced_index))
+        skip_1 = self._gather_ats_skip(skip_1, ats_indices)
+        x = self._forward_post_attention(x, skip_1,forced_index)
+        return (x,forced_index)
+    def _forward_pre_attention(self, x,forced_index):
+        skip_1 = x
+        x, _ = self.qkv_gate(x,forced_index=forced_index)
+        x = self.input_layer_norm(x)
+        x = self.qkv(x)
+        return skip_1, x, forced_index
+    def _forward_post_attention(self, x, skip_1,forced_index):
+        # Gate-accumulator block 2
+        x, index = self.projection_gate(x,forced_index=forced_index)
+        x = self.projection(x)
+        x = self.projection_accumulator(x, index)
+
+        x = self.add(self.drop_path(x), skip_1)
+        skip_2 = x
+
+        # Gate-accumulator block 3
+        if self.gate_before_ln:
+            x, index = self.mlp_gate(x,forced_index=forced_index)
+            x = self.mlp_layer_norm(x)
+        else:
+            x = self.mlp_layer_norm(x)
+            x, index = self.mlp_gate(x,forced_index=forced_index)
+        x = self._forward_mlp(x)
+        x = self.mlp_accumulator(x, index)
+        x = self.add(self.drop_path(x), skip_2)
+
+        return x
+    def _forward_attention(self, a):
+        a, v, index_k = self._forward_matmul_1(a)
+
+        a, v, old_dtype = self._cast_matmul_2(a, v)
+        a, ats_indices = self._adaptive_token_sampling(a, v)
+        if not self.matmul_2_cast:
+            # We clone v here because it may be a direct reference to
+            # self.qkv_accumulator.a.
+            v = v.clone()
+        v_n_tilde, v_delta_tilde, index_v = self.v_gate(v, forced_index=index_k)
+        a_n_tilde, a_delta_tilde, _ = self.matmul_gate(a, forced_index=index_v)
+        a = self.matmul_accumulator_2(
+            a_n_tilde, v_n_tilde, a_delta_tilde, v_delta_tilde
+        )
+
+        a = self._recombine_heads(a)
+        a = self._uncast_matmul_2(a, old_dtype)
+        return a, ats_indices
+
+
+class BayerTokenwiseBlock(EventfulTokenwiseBlock):
+    """
+    An EventfulTokenWiseBlock that adds eventfulness to the query-key
+    product (in addition to token-wise operations).
+    """
+
+    def __init__(self, **super_kwargs):
+        super().__init__(**super_kwargs)
+
+
+    def forward(self, x):
+        x,forced_index=x
+        skip_1, x, forced_index = self._forward_pre_attention(x,forced_index)
+        x = self.qkv_accumulator(x, forced_index)
+        x, ats_indices = self._forward_attention(x)
+        skip_1 = self._gather_ats_skip(skip_1, ats_indices)
+        x = self._forward_post_attention(x, skip_1,forced_index)
+        return (x,forced_index)
+    def _forward_pre_attention(self, x,forced_index):
+        skip_1 = x
+
+        # Gate-accumulator block 1
+        if self.gate_before_ln:
+            x, index = self.qkv_gate(x,forced_index=forced_index)
+            x = self.input_layer_norm(x)
+        else:
+            x = self.input_layer_norm(x)
+            x, index = self.qkv_gate(x,forced_index=forced_index)
+        x = self.qkv(x)
+        return skip_1, x, index
+    def _forward_post_attention(self, x, skip_1,forced_index):
+        # Gate-accumulator block 2
+        x, index = self.projection_gate(x,forced_index=forced_index)
+        x = self.projection(x)
+        x = self.projection_accumulator(x, index)
+
+        x = self.add(self.drop_path(x), skip_1)
+        skip_2 = x
+
+        # Gate-accumulator block 3
+        if self.gate_before_ln:
+            x, index = self.mlp_gate(x,forced_index=forced_index)
+            x = self.mlp_layer_norm(x)
+        else:
+            x = self.mlp_layer_norm(x)
+            x, index = self.mlp_gate(x,forced_index=forced_index)
+        x = self._forward_mlp(x)
+        x = self.mlp_accumulator(x, index)
+        x = self.add(self.drop_path(x), skip_2)
+        return x       

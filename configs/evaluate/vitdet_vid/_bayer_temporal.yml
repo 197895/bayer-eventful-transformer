@@ -1,0 +1,5 @@
+model:
+  backbone_config:
+    # block_class: "BayerTokenwiseBlock"
+    block_class: "BayerTokenwiseBlock"
+    windowed_class: "BayerTokenwiseBlock"

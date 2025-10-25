@@ -2,12 +2,14 @@ import torch.nn as nn
 from detectron2.config import LazyConfig, instantiate
 from detectron2.structures import ImageList
 from torchvision.transforms import Normalize
-
+import torch
+import numpy as np
 from eventful_transformer.backbones import ViTBackbone
 from eventful_transformer.base import ExtendedModule, numeric_tuple
 from eventful_transformer.blocks import LN_EPS
 from utils.image import as_float32, pad_to_size
-
+from utils.unprocess_np import rgb_to_bayer,get_significant_tokens,reuse_non_significant_tokens,fast_mask_visulize,update_patches,split_image_into_patches,combine_patches_to_image
+from utils.unprocess_np import *
 
 # Resources consulted:
 # https://github.com/facebookresearch/detectron2/blob/main/detectron2/modeling/backbone/utils.py
@@ -182,10 +184,37 @@ class ViTDet(ExtendedModule):
         roi_heads_config = detectron2_config["roi_heads"]
         roi_heads_config["num_classes"] = classes
         self.roi_heads = instantiate(roi_heads_config)
-
+        ### new
+        self.is_bayer=backbone_config['block_class']=="Block" or backbone_config['block_class']=="BayerTokenwiseBlock"
+        self.last_bayer_image=None
+        self.last_image=None
+        self.input_shape=input_shape
+        self.patch_size=patch_size
+        ### new
+    def reset(self):
+        """
+        Resets extra state for this module and all submodules.
+        """
+        self.last_bayer_image=None
+        self.last_image=None
+        for module in self.extended_modules():
+            module.reset_self()
     def forward(self, x):
-        images, x = self.pre_backbone(x)
+        if self.is_bayer:
+            image=pad_to_size(x, self.input_shape[-2:])
+            image = image.squeeze(0).permute(1, 2, 0).cpu().numpy()
+            bayer_image=rgb_to_bayer(image/255.0)
+            keep_index=get_significant_tokens(bayer_image,self.last_bayer_image,self.input_shape,self.patch_size,device=x.device)
+            self.last_bayer_image = update_patches(bayer_image, self.last_bayer_image, keep_index, self.patch_size)
+            images, x = self.pre_backbone(x,keep_index)
+            x=(x,keep_index)
+        else:
+            images, x = self.pre_backbone(x)
+            
         x = self.backbone(x)
+        if self.is_bayer:
+            if isinstance(x, tuple):
+                x, _ = x
         results = self.post_backbone(images, x)
         return results
 
@@ -208,13 +237,18 @@ class ViTDet(ExtendedModule):
         ]
         return result
 
-    def pre_backbone(self, x):
+    def pre_backbone(self, x,keep_index=None):
         """
         Computes the portion of the model before the Transformer
         backbone.
         """
         x = as_float32(x)  # Range [0, 1]
+        x=pad_to_size(x, self.input_shape[-2:])
+        if keep_index is not None:
+            x=reuse_non_significant_tokens(x,self.last_image,keep_index,self.patch_size)
+        self.last_image=x
         x = self.preprocessing(x)
+        
         images = ImageList.from_tensors([x])
         x = self.embedding(x)
         return images, x

@@ -59,6 +59,12 @@ class ViTBackbone(ExtendedModule):
             )
 
     def forward(self, x):
+        if isinstance(x, tuple):
+            x,forced_index=x
+        else:
+            forced_index=None
         x = self.position_encoding(x)
+        if forced_index is not None:
+            x=(x,forced_index)
         x = self.blocks(x)
         return x

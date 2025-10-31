@@ -1,0 +1,6 @@
+_defaults:
+  - "configs/models/vitdet_b_nfs.yml"
+_output: "results/evaluate/vitdet_nfs/${_name}/"
+split: "coco_annotations_eval"
+vanilla: false
+weights: "weights/vitdet_b_nfs.pth"

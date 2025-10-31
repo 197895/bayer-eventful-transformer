@@ -177,7 +177,7 @@ def dict_csv_line(x):
 
     :param x: A dict
     """
-    return ",".join(f"{x[k]:g}" for k in sorted(x.keys()))
+    return ",".join(f"{float(x[k]):g}" if hasattr(x[k], 'item') else f"{x[k]:g}" for k in sorted(x.keys()))
 
 
 def dict_string(x, indent=4, value_format=".4g"):

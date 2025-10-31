@@ -185,7 +185,7 @@ class ViTDet(ExtendedModule):
         roi_heads_config["num_classes"] = classes
         self.roi_heads = instantiate(roi_heads_config)
         ### new
-        self.is_bayer=backbone_config['block_class']=="Block" or backbone_config['block_class']=="BayerTokenwiseBlock"
+        self.is_bayer=backbone_config.get('block_class') in ["BayerBlock", "BayerTokenwiseBlock"]
         self.last_bayer_image=None
         self.last_image=None
         self.input_shape=input_shape

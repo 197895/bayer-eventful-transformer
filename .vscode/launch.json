@@ -16,7 +16,9 @@
             },
             "args": [
             "bayer_temporal_full_672",
-            // "temporal_full_672"
+            // "bayer_temporal_full_1024"
+            // "temporal_full_672",
+            // "base_672"
 
             ]
         }

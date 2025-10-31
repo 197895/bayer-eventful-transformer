@@ -14,7 +14,7 @@ import torch
 import cv2
 from scipy.interpolate import interp2d
 from utils.image import pad_to_size
-
+import matplotlib.pyplot as plt
 def inverse_smoothstep(image):
   """Approximately inverts a global tone mapping curve."""
   image = np.clip(image, 0.0, 1.0)
@@ -171,6 +171,7 @@ def rgb_to_bayer_4ch(image, use_random_params=False, rgb2cam=None, rgb_gain=1.0,
   processed = gamma_expansion(processed)
   processed = apply_ccm(processed, rgb2cam)
   processed = safe_invert_gains(processed, rgb_gain, red_gain, blue_gain)
+  
   processed = np.clip(processed, 0.0, 1.0)
   
   # 应用Bayer马赛克
@@ -209,6 +210,7 @@ def rgb_to_bayer(image, use_random_params=False, rgb2cam=None, rgb_gain=1.0,
   elif output_format == 'hw1':
     # 使用demosaic转换为[H, W, 1]
     bayer_hw1 = bayer_4ch_to_raw_hw_bilinear(bayer_4ch)
+    bayer_hw1 = np.clip(bayer_hw1 * (1.0 / 0.56), 0.0, 1.0)
     return bayer_hw1
   else:
     raise ValueError("output_format must be '4ch' or 'hw1'")
@@ -491,6 +493,7 @@ class SignificantTokensStats:
     
     # 打印统计摘要
     self._print_summary(stats)
+    return stats['significant_ratio_avg']*100
   
   def _print_summary(self, stats):
     """打印统计摘要"""
@@ -519,8 +522,9 @@ class SignificantTokensStats:
 # 创建全局实例
 _significant_tokens_stats = SignificantTokensStats()
 
-
-def get_significant_tokens(bayer_image, last_bayer_image, input_size_chw, patch_size, k=40, t=0.005, device='cpu'):
+#672 k=60 tau=0.004还行
+#1024 k=80, t=0.003还行 
+def get_significant_tokens(bayer_image, last_bayer_image, input_size_chw, patch_size, k=60, t=0.004, device='cpu',output_kt=False):
     """根据Bayer图像的变化，确定显著的token索引。
     
     Args:
@@ -535,6 +539,8 @@ def get_significant_tokens(bayer_image, last_bayer_image, input_size_chw, patch_
     Returns:
       keep_index: torch.Tensor of shape (1, n)，包含所有显著token的索引，device与输入一致
     """
+    if output_kt:
+      return k,t
     # 获取图像尺寸
     _, h, w = input_size_chw
     patch_h, patch_w = patch_size
@@ -809,7 +815,128 @@ def fast_mask_visulize(x:torch.Tensor=None, mask_indeces:torch.Tensor=None, inpu
     
     # Save the visualization
     cv2.imwrite(save_path, cv2.cvtColor(result, cv2.COLOR_RGB2BGR))
+
+def visualize_detection(frame, result, mask=None, img_size=None, patch_size=None, alpha=0.5, save_path="debug_visualize.png"):
+    """
+    Visualize detection results on the frame with an optional alpha mask overlay.
     
+    Args:
+        frame: torch.Tensor image (C, H, W)
+        result: dict with keys 'boxes', 'scores', 'labels'
+        mask: Optional tensor mask of 0s and 1s for patches
+        img_size: Tuple of (H, W) for original image size
+        patch_size: Tuple of (H, W) for patch size
+        alpha: Opacity for mask overlay (0.0 = no overlay, 1.0 = fully opaque white)
+        save_path: Path to save the visualization (default: "debug_visualize.png")
+    
+    Returns:
+        numpy array of visualized image
+    """
+    # Convert frame to numpy and transpose from (C,H,W) to (H,W,C)
+    if isinstance(frame, torch.Tensor):
+        frame = frame.cpu().numpy()
+        if frame.shape[0] == 3:  # If in CHW format
+            frame = np.transpose(frame, (1, 2, 0))
+    
+    # Normalize if needed
+    if frame.max() <= 1.0:
+        frame = (frame * 255).astype(np.uint8)
+    else:
+        frame = frame.astype(np.uint8)
+    
+    # Convert to BGR for OpenCV
+    image = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+
+    # Move results to CPU and convert to numpy
+    boxes = result['boxes'].cpu().numpy()
+    scores = result['scores'].cpu().numpy()
+    labels = result['labels'].cpu().numpy()
+    
+    # NFS dataset category names (1-based indexing, convert from 0-based)
+    category_names = {
+        1: "person",
+        2: "aircraft",
+        3: "airboard",
+        4: "ball",
+        5: "face",
+        6: "bicycle",
+        7: "bird",
+        8: "dollar",
+        9: "cup",
+        10: "animal",
+        11: "vehicle",
+        12: "drone",
+        13: "fish",
+        14: "motorcycle",
+        15: "bag",
+        16: "shuffleboard",
+        17: "yoyo"
+    }
+    
+    # Colors for different classes (17 classes)
+    colors = plt.cm.hsv(np.linspace(0, 1, 18))[:, :3] * 255
+    
+    # Draw boxes, scores and labels
+    for box, score, label in zip(boxes, scores, labels):
+        x1, y1, x2, y2 = box.astype(int)
+        # Convert from 0-based to 1-based category ID for lookup
+        category_id = int(label) + 1
+        color = colors[category_id % len(colors)].tolist()
+        
+        # Draw rectangle
+        cv2.rectangle(image, (x1, y1), (x2, y2), color, 2)
+        
+        # Create label text
+        label_name = category_names.get(category_id, f"class_{category_id}")
+        label_text = f"{label_name}: {score:.2f}"
+        
+        # Put text above the box
+        cv2.putText(image, label_text, (x1, y1 - 5), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+    
+    # Overlay mask if provided (optional)
+    if mask is not None and alpha > 0 and img_size is not None and patch_size is not None:
+        if isinstance(mask, torch.Tensor):
+            mask = mask.cpu().numpy()
+        
+        if mask.ndim == 3 and mask.shape[0] == 1:  # If mask has shape [1, H, W]
+            mask = mask[0]
+        
+        patches_h = img_size[0] // patch_size[0]
+        patches_w = img_size[1] // patch_size[1]
+        
+        # If mask is in patch space, resize it to match the image dimensions
+        if mask.shape[0] == patches_h and mask.shape[1] == patches_w:
+            mask_fullsize = np.zeros((img_size[0], img_size[1]), dtype=np.float32)
+            for i in range(patches_h):
+                for j in range(patches_w):
+                    y_start = i * patch_size[0]
+                    y_end = (i + 1) * patch_size[0]
+                    x_start = j * patch_size[1]
+                    x_end = (j + 1) * patch_size[1]
+                    mask_fullsize[y_start:y_end, x_start:x_end] = mask[i, j]
+            mask = mask_fullsize
+        else:
+            # Resize mask to match image dimensions
+            mask = cv2.resize(mask, (img_size[1], img_size[0]), interpolation=cv2.INTER_NEAREST)
+        
+        # Create white overlay
+        white_overlay = np.ones_like(image) * 255
+        
+        # Blend image with white overlay using alpha as scalar
+        blended = cv2.addWeighted(image, 1.0 - alpha, white_overlay, alpha, 0)
+        
+        # Apply blended result only where mask is 1
+        mask_expanded = np.expand_dims(mask, axis=2).astype(np.uint8)
+        image = np.where(mask_expanded == 1, blended, image).astype(np.uint8)
+    
+    # Convert back to RGB
+    rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    
+    # Save the image to the specified path
+    cv2.imwrite(save_path, cv2.cvtColor(rgb_image, cv2.COLOR_RGB2BGR))
+    
+    return rgb_image
 def update_patches(image_hwc, last_image_hwc, keep_index, patch_size):
   """将image_hwc中在keep_index里面的patch更新到last_image_hwc里面。
   

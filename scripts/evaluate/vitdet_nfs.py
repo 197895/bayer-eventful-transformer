@@ -36,9 +36,9 @@ def evaluate_vitdet_metrics(device, model, data, config):
         for frame, annotations in tqdm(nfs_item, ncols=0):
             with torch.inference_mode():
                 results= model(frame.to(device))
-                if debug_signal:
-                    debug_signal=False
-                    visualize_detection(pad_to_size(frame[0], (672,672)), results[0],mask=None,patch_size=(16,16),img_size=(672,672),alpha=0.7)
+                # if debug_signal:
+                #     debug_signal=False
+                #     visualize_detection(pad_to_size(frame[0], (672,672)), results[0],mask=None,patch_size=(16,16),img_size=(672,672),alpha=0.7)
                 outputs.extend(results)
             labels.append(squeeze_dict(dict_to_device(annotations, device), dim=0))
 

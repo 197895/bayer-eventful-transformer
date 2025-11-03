@@ -1,0 +1,6 @@
+_defaults:
+  - "configs/models/vitdet_l_vid.yml"
+_output: "results/evaluate/vitdet_vid/${_name}/large"
+split: "vid_val"
+vanilla: false
+weights: "weights/vitdet_l_vid.pth"

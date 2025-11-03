@@ -524,7 +524,7 @@ _significant_tokens_stats = SignificantTokensStats()
 
 #672 k=60 tau=0.004还行
 #1024 k=80, t=0.003还行 
-def get_significant_tokens(bayer_image, last_bayer_image, input_size_chw, patch_size, k=60, t=0.004, device='cpu',output_kt=False):
+def get_significant_tokens(bayer_image, last_bayer_image, input_size_chw, patch_size,  k=80 ,t=0.005, device='cpu',output_kt=False):
     """根据Bayer图像的变化，确定显著的token索引。
     
     Args:
